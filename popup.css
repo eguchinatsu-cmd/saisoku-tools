@@ -1,0 +1,123 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  width: 360px;
+  font-family: -apple-system, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  color: #333;
+  background: #f8f9fa;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #2c3e50;
+  color: #fff;
+}
+.header h1 { font-size: 15px; font-weight: 600; }
+.icon-btn {
+  background: none; border: none; color: #fff;
+  font-size: 18px; cursor: pointer; opacity: 0.8;
+}
+.icon-btn:hover { opacity: 1; }
+
+.settings {
+  padding: 10px 14px;
+  background: #eef0f2;
+  border-bottom: 1px solid #ddd;
+}
+.settings.hidden { display: none; }
+.settings label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 6px;
+  color: #555;
+}
+.settings input {
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  font-size: 12px;
+  margin-top: 2px;
+}
+#settingsStatus {
+  font-size: 11px;
+  margin-left: 8px;
+  color: #27ae60;
+}
+
+.tasks { padding: 10px 14px; }
+
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.btn {
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 7px 14px;
+  transition: background 0.15s;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-sm { font-size: 11px; padding: 4px 10px; }
+
+.task-btn {
+  background: #3498db;
+  color: #fff;
+  min-width: 120px;
+}
+.task-btn:hover:not(:disabled) { background: #2980b9; }
+.task-btn.running { background: #f39c12; animation: pulse 1.5s infinite; }
+.task-btn.done { background: #27ae60; }
+.task-btn.error { background: #e74c3c; }
+
+.btn-all {
+  width: 100%;
+  background: #2c3e50;
+  color: #fff;
+  font-weight: 600;
+  padding: 9px;
+  margin-top: 4px;
+}
+.btn-all:hover:not(:disabled) { background: #1a252f; }
+
+.status {
+  font-size: 12px;
+  color: #888;
+  flex: 1;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-area { padding: 0 14px 10px; }
+.log-header { font-size: 11px; color: #888; margin-bottom: 4px; }
+.log-box {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 11px;
+  padding: 8px;
+  border-radius: 4px;
+  height: 180px;
+  overflow-y: auto;
+  line-height: 1.4;
+}
+.log-box .info { color: #9cdcfe; }
+.log-box .success { color: #4ec9b0; }
+.log-box .error { color: #f48771; }
+.log-box .progress { color: #dcdcaa; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}

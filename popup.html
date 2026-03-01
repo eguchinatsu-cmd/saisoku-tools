@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <h1>催促ツール</h1>
+    <button id="settingsBtn" class="icon-btn" title="設定">⚙</button>
+  </div>
+
+  <div id="settingsPanel" class="settings hidden">
+    <label>kintone APIトークン
+      <input type="password" id="apiToken" placeholder="APIトークンを入力">
+    </label>
+    <label>kintoneドメイン
+      <input type="text" id="domain" value="japanconsulting.cybozu.com">
+    </label>
+    <label>kintoneアプリID
+      <input type="text" id="appId" value="11">
+    </label>
+    <button id="saveSettings" class="btn btn-sm">保存</button>
+    <span id="settingsStatus"></span>
+  </div>
+
+  <div class="tasks">
+    <div class="task-row" data-task="karisatei">
+      <button class="btn task-btn" data-task="karisatei">仮査定後催促</button>
+      <span class="status" id="status-karisatei">--</span>
+    </div>
+    <div class="task-row" data-task="honsatei">
+      <button class="btn task-btn" data-task="honsatei">本査定後催促</button>
+      <span class="status" id="status-honsatei">--</span>
+    </div>
+    <div class="task-row" data-task="konpokit">
+      <button class="btn task-btn" data-task="konpokit">梱包キット催促</button>
+      <span class="status" id="status-konpokit">--</span>
+    </div>
+    <button class="btn btn-all" id="runAllBtn">全部実行</button>
+  </div>
+
+  <div class="log-area">
+    <div class="log-header">ログ</div>
+    <div id="logBox" class="log-box"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
