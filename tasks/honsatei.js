@@ -15,7 +15,7 @@ import { sleep, execMain, withTimeout, waitForLineChatReady, waitForChatContent,
 import { getKintoneRecords } from '../lib/kintone-api.js';
 import {
   getSearchBoxPosition, clearSearchBox, getMessageSearchLinkPosition,
-  getFirstSearchResultPosition, checkUnreadInSearchResult,
+  getFirstSearchResultPosition, checkUnreadInSearchResult, checkTodayActivityInSearchResult,
   scrollChatToBottom, checkHonsateiEligibility,
   sendTemplateMessageByDOM, selectTemplateByDOM, sendDirectMessageByDOM, editAndSendByDOM,
   openTagEditor, clickTag, getSaveButtonPosition, getCancelButtonPosition, verifyTag,
@@ -131,6 +131,13 @@ async function processTarget(tabId, target, tagName, logger) {
   if (hasUnread) {
     await execMain(tabId, clearSearchBox);
     return { skipped: true, reason: '未読メッセージあり（既読防止）' };
+  }
+
+  // 2.5. 今日の活動チェック（チャットを開く前にスキップ）
+  const hasTodayActivity = await execMain(tabId, checkTodayActivityInSearchResult);
+  if (hasTodayActivity) {
+    await execMain(tabId, clearSearchBox);
+    return { skipped: true, reason: '今日の活動あり（チャット未開封）' };
   }
 
   // 3. 「メッセージを検索」→ 結果をクリック
