@@ -76,6 +76,8 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(TAG_ALARM, { periodInMinutes: 60 });
+  // 起動時もトークン初期化（onInstalledが発火しないケース対策）
+  initSlackConfig(atob('REDACTED'));
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === TAG_ALARM) checkAndCreateMonthlyTags();
