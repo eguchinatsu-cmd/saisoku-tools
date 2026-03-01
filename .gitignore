@@ -1,0 +1,4 @@
+credentials.local.json
+slack-config.json
+.playwright-session/
+node_modules/

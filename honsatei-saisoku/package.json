@@ -1,0 +1,13 @@
+{
+  "name": "honsatei-saisoku",
+  "version": "1.0.0",
+  "description": "本査定後催促 CLIツール",
+  "main": "cli.js",
+  "scripts": {
+    "start": "node cli.js",
+    "headless": "node cli.js --headless"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}
