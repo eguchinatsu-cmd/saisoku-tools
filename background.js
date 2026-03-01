@@ -248,6 +248,10 @@ async function handleRunAll() {
         } catch (_) {}
         await sleep(1000);
       }
+
+      // Slack通知（keepAlive中に実行 — service worker終了防止）
+      chrome.runtime.sendMessage({ type: 'completeAll', results }).catch(() => {});
+      await notifyAllResults(results).catch(e => console.error('[Saisoku] Slack通知エラー:', e.message));
     } finally {
       clearInterval(keepAlive);
     }
@@ -269,10 +273,6 @@ async function handleRunAll() {
     isRunning = false;
     currentTask = null;
   }
-
-  chrome.runtime.sendMessage({ type: 'completeAll', results }).catch(() => {});
-  // Slack通知（全タスク完了まとめ）
-  await notifyAllResults(results).catch(() => {});
 }
 
 // === 月初タグ自動作成 ===
