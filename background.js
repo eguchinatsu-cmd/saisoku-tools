@@ -7,7 +7,6 @@ import { attachDebugger, detachDebugger, cdpClick } from './lib/cdp.js';
 import { sleep, execMain, waitForTabLoad, waitForLineChatReady, ensureWindowVisible, cleanupOrphanedPopups, getCurrentMonthTag } from './lib/utils.js';
 import { createLogger, getLogBuffer, clearLogBuffer, restoreLogBuffer } from './lib/logger.js';
 import { getChatClosePosition } from './lib/line-chat.js';
-import { initSlackConfig, notifyResult, notifyError, notifyAllResults } from './lib/slack.js';
 
 // 起動時にログバッファを復元
 restoreLogBuffer();
@@ -71,13 +70,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 const TAG_ALARM = 'saisoku-tag-check';
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(TAG_ALARM, { periodInMinutes: 60 }); // 1時間ごとにチェック
-  // Slack通知トークン初期化
-  initSlackConfig(atob('eG94Yi0xODI1MTgzODY0NjUtMTA0MTgxMzk2MjIxMTctQUpGVEF3R0N0QkRMb1htdkRNNUlPODNY'));
 });
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(TAG_ALARM, { periodInMinutes: 60 });
-  // 起動時もトークン初期化（onInstalledが発火しないケース対策）
-  initSlackConfig(atob('eG94Yi0xODI1MTgzODY0NjUtMTA0MTgxMzk2MjIxMTctQUpGVEF3R0N0QkRMb1htdkRNNUlPODNY'));
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === TAG_ALARM) checkAndCreateMonthlyTags();
@@ -176,18 +171,12 @@ async function handleRun(taskName) {
 
     await saveTaskCompletion(taskName, result);
     chrome.runtime.sendMessage({ type: 'complete', task: taskName, result }).catch(() => {});
-    // Slack通知
-    const taskLabels = { karisatei: '仮査定', honsatei: '本査定', konpokit: '梱包キット' };
-    if (result.summary) await notifyResult(taskLabels[taskName] || taskName, result.summary).catch(() => {});
     return result;
 
   } catch (e) {
     const errResult = { error: e.message };
     await saveTaskCompletion(taskName, errResult);
     chrome.runtime.sendMessage({ type: 'complete', task: taskName, result: errResult }).catch(() => {});
-    // Slackエラー通知
-    const taskLabels = { karisatei: '仮査定', honsatei: '本査定', konpokit: '梱包キット' };
-    await notifyError(taskLabels[taskName] || taskName, e.message).catch(() => {});
     return errResult;
   } finally {
     if (tab && debuggerAttached) {
@@ -248,10 +237,6 @@ async function handleRunAll() {
         } catch (_) {}
         await sleep(1000);
       }
-
-      // Slack通知（keepAlive中に実行 — service worker終了防止）
-      chrome.runtime.sendMessage({ type: 'completeAll', results }).catch(() => {});
-      await notifyAllResults(results).catch(e => console.error('[Saisoku] Slack通知エラー:', e.message));
     } finally {
       clearInterval(keepAlive);
     }
@@ -273,6 +258,8 @@ async function handleRunAll() {
     isRunning = false;
     currentTask = null;
   }
+
+  chrome.runtime.sendMessage({ type: 'completeAll', results }).catch(() => {});
 }
 
 // === 月初タグ自動作成 ===

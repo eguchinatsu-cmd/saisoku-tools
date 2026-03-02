@@ -12,8 +12,7 @@
   ],
   "host_permissions": [
     "https://chat.line.biz/*",
-    "https://*.cybozu.com/*",
-    "https://slack.com/*"
+    "https://*.cybozu.com/*"
   ],
   "background": {
     "service_worker": "background.js",
