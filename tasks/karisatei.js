@@ -108,14 +108,24 @@ async function scrollToYesterday(tabId, logger) {
       await sleep(1000);
       return true;
     }
-    await execMain(tabId, scrollChatList, [400]);
+    const scrollResult = await execMain(tabId, scrollChatList, [400]);
+    // 10回ごとにスクロール位置を診断出力
+    if (i % 10 === 0) {
+      logger.info(`[scroll ${i}] scrollTop=${scrollResult?.scrollTop}, scrollHeight=${scrollResult?.scrollHeight}, moved=${scrollResult?.moved}`);
+    }
+    // スクロールが動かなくなったら打ち切り
+    if (scrollResult && !scrollResult.moved) {
+      logger.info(`[scroll ${i}] スクロール末端に到達`);
+      break;
+    }
     await sleep(300);
   }
   // 診断: 最後のスキャンで見つかったリーフテキストを出力
+  const diag = `scrollTop=${lastResult?.scrollTop}, scrollHeight=${lastResult?.scrollHeight}`;
   if (lastResult?.sampleTexts?.length > 0) {
-    logger.info(`[診断] リーフテキスト: ${lastResult.sampleTexts.join(' | ')}`);
+    logger.info(`[診断] ${diag} | リーフテキスト: ${lastResult.sampleTexts.join(' | ')}`);
   } else {
-    logger.info(`[診断] リーフテキストなし (scrollTop=${lastResult?.scrollTop}, scrollHeight=${lastResult?.scrollHeight})`);
+    logger.info(`[診断] ${diag} | リーフテキストなし`);
   }
   logger.info('「昨日」セクションが見つかりませんでした');
   return false;
