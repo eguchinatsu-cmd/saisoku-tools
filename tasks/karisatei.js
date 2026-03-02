@@ -30,7 +30,15 @@ export async function runKarisatei(tabId, popupWindowId, logger) {
 
   // Step 1: 昨日セクションまでスクロール
   logger.info('チャットリストを最上部にスクロール...');
-  await execMain(tabId, scrollChatListToTop);
+  try {
+    await execMain(tabId, scrollChatListToTop);
+  } catch (e) {
+    logger.info(`scrollToTop失敗（${e.message}）→ ページリロードしてリトライ`);
+    await chrome.tabs.update(tabId, { url: 'https://chat.line.biz/' });
+    await waitForLineChatReady(tabId, 15000);
+    await sleep(2000);
+    await execMain(tabId, scrollChatListToTop);
+  }
   await sleep(1000);
 
   await scrollToYesterday(tabId, logger);
