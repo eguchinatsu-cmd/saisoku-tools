@@ -60,7 +60,8 @@ exit /b 0
 :dl
 set "FILE=%~1"
 set "SUB=%~2"
-powershell -Command "Invoke-WebRequest -Uri '%BASE%/%SUB%%FILE%' -OutFile '%D%%SUB%%FILE%' -UseBasicParsing" 2>nul
+set "URLSUB=%SUB:\=/%"
+powershell -Command "Invoke-WebRequest -Uri '%BASE%/%URLSUB%%FILE%' -OutFile '%D%%SUB%%FILE%' -UseBasicParsing" 2>nul
 if errorlevel 1 (
   echo   [ERROR] %SUB%%FILE%
   set /a NG+=1
