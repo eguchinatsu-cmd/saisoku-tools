@@ -6,10 +6,10 @@
  * kintone不使用。
  */
 
-import { cdpClick, cdpSelectAll, cdpType, cdpEnableBackgroundMode } from '../lib/cdp.js';
+import { cdpClick, cdpSelectAll, cdpType, cdpEnableBackgroundMode, cdpScrollChatList, cdpScrollChatListToTop } from '../lib/cdp.js';
 import { sleep, execMain, withTimeout, waitForLineChatReady, ensureWindowVisible, normalizeName, getCurrentMonthTag } from '../lib/utils.js';
 import {
-  scrollChatListToTop, scrollChatList, findYesterdaySection, scanKarisateiTargets,
+  findYesterdaySection, scanKarisateiTargets,
   clickUserInChatList, checkKarisateiEligibility,
   sendTemplateMessageByDOM,
   openTagEditor, clickTag, getSaveButtonPosition, getCancelButtonPosition, verifyTag,
@@ -34,13 +34,13 @@ export async function runKarisatei(tabId, popupWindowId, logger) {
   // Step 1: 昨日セクションまでスクロール
   logger.info('チャットリストを最上部にスクロール...');
   try {
-    await execMain(tabId, scrollChatListToTop);
+    await cdpScrollChatListToTop(tabId);
   } catch (e) {
     logger.info(`scrollToTop失敗（${e.message}）→ ページリロードしてリトライ`);
     await chrome.tabs.update(tabId, { url: 'https://chat.line.biz/' });
     await waitForLineChatReady(tabId, 15000);
     await sleep(2000);
-    await execMain(tabId, scrollChatListToTop);
+    await cdpScrollChatListToTop(tabId);
   }
   await sleep(1000);
 
@@ -120,11 +120,11 @@ async function scrollToYesterday(tabId, logger) {
       await sleep(1000);
       return true;
     }
-    // DOM scrollTopで下スクロール（背面でも確実に動作）
-    const pos = await execMain(tabId, scrollChatList, [400]);
+    // CDP Runtime.evaluate経由で下スクロール（背面タブでも動作）
+    const pos = await cdpScrollChatList(tabId, 400);
     // 10回ごとにスクロール位置を診断出力
     if (i % 10 === 0) {
-      logger.info(`[scroll ${i}] scrollTop=${pos?.scrollTop}, scrollHeight=${pos?.scrollHeight}`);
+      logger.info(`[scroll ${i}] scrollTop=${pos?.scrollTop}, scrollHeight=${pos?.scrollHeight}, clientHeight=${pos?.clientHeight}`);
     }
     await sleep(500);
   }
@@ -141,9 +141,9 @@ async function scrollToYesterday(tabId, logger) {
 
 async function scanTargets(tabId, logger) {
   const allTargets = new Set();
-  // DOM scrollTopで少し上（今日寄り）に戻す
+  // CDP経由で少し上（今日寄り）に戻す
   for (let i = 0; i < 3; i++) {
-    await execMain(tabId, scrollChatList, [-500]);
+    await cdpScrollChatList(tabId, -500);
     await sleep(400);
   }
   let everFoundYesterday = false;
@@ -162,8 +162,8 @@ async function scanTargets(tabId, logger) {
       logger.info(`昨日/一昨日の境目を検出（${scan + 1}回目のスキャン）`);
       break;
     }
-    // DOM scrollTopで下スクロール
-    await execMain(tabId, scrollChatList, [400]);
+    // CDP経由で下スクロール
+    await cdpScrollChatList(tabId, 400);
     await sleep(600);
   }
   return [...allTargets];
@@ -181,8 +181,8 @@ async function processUser(tabId, userName, tagName, sentUsers, logger) {
       return { skipped: true, reason: '未読メッセージあり（既読防止）' };
     }
     if (clickResult?.clicked) break;
-    // DOM scrollTopでスクロール（上下交互）
-    await execMain(tabId, scrollChatList, [attempt % 2 === 0 ? 400 : -400]);
+    // CDP経由でスクロール（上下交互）
+    await cdpScrollChatList(tabId, attempt % 2 === 0 ? 400 : -400);
     await sleep(500);
   }
 
