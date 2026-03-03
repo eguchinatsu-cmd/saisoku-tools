@@ -6,7 +6,7 @@
  * kintone不使用。
  */
 
-import { cdpClick, cdpSelectAll, cdpType } from '../lib/cdp.js';
+import { cdpClick, cdpSelectAll, cdpType, cdpEnableBackgroundMode } from '../lib/cdp.js';
 import { sleep, execMain, withTimeout, waitForLineChatReady, ensureWindowVisible, normalizeName, getCurrentMonthTag } from '../lib/utils.js';
 import {
   scrollChatListToTop, scrollChatList, findYesterdaySection, scanKarisateiTargets,
@@ -27,6 +27,9 @@ export async function runKarisatei(tabId, popupWindowId, logger) {
 
   logger.info(`テンプレート: ${TEMPLATE_NAME}`);
   logger.info(`タグ: ${tagName}`);
+
+  // 背面タブでも仮想スクロールが動作するようにrAFパッチを注入
+  await cdpEnableBackgroundMode(tabId);
 
   // Step 1: 昨日セクションまでスクロール
   logger.info('チャットリストを最上部にスクロール...');
