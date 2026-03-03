@@ -61,7 +61,7 @@ exit /b 0
 set "FILE=%~1"
 set "SUB=%~2"
 set "URLSUB=%SUB:\=/%"
-powershell -Command "Invoke-WebRequest -Uri '%BASE%/%URLSUB%%FILE%' -OutFile '%D%%SUB%%FILE%' -UseBasicParsing" 2>nul
+curl.exe -sS -L -o "%D%%SUB%%FILE%" "%BASE%/%URLSUB%%FILE%"
 if errorlevel 1 (
   echo   [ERROR] %SUB%%FILE%
   set /a NG+=1
