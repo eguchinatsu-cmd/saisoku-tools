@@ -26,22 +26,22 @@ call :dl "popup.html" ""
 call :dl "popup.js" ""
 
 echo [2/4] icons...
-call :dl "icon128.png" "icons\\"
-call :dl "icon16.png" "icons\\"
-call :dl "icon48.png" "icons\\"
+call :dl "icon128.png" "icons\"
+call :dl "icon16.png" "icons\"
+call :dl "icon48.png" "icons\"
 
 echo [3/4] lib...
-call :dl "cdp.js" "lib\\"
-call :dl "kintone-api.js" "lib\\"
-call :dl "line-chat.js" "lib\\"
-call :dl "logger.js" "lib\\"
-call :dl "slack.js" "lib\\"
-call :dl "utils.js" "lib\\"
+call :dl "cdp.js" "lib\"
+call :dl "kintone-api.js" "lib\"
+call :dl "line-chat.js" "lib\"
+call :dl "logger.js" "lib\"
+call :dl "slack.js" "lib\"
+call :dl "utils.js" "lib\"
 
 echo [4/4] tasks...
-call :dl "honsatei.js" "tasks\\"
-call :dl "karisatei.js" "tasks\\"
-call :dl "konpokit.js" "tasks\\"
+call :dl "honsatei.js" "tasks\"
+call :dl "karisatei.js" "tasks\"
+call :dl "konpokit.js" "tasks\"
 
 echo.
 if %NG% GTR 0 (
@@ -60,8 +60,12 @@ exit /b 0
 :dl
 set "FILE=%~1"
 set "SUB=%~2"
-set "URLSUB=%SUB:\=/%"
-curl.exe -sS -L -o "%D%%SUB%%FILE%" "%BASE%/%URLSUB%%FILE%"
+if "%SUB%"=="" (
+  set "URLSUB="
+) else (
+  set "URLSUB=%SUB:\=/%"
+)
+curl.exe -sS -f -L -o "%D%%SUB%%FILE%" "%BASE%/%URLSUB%%FILE%"
 if errorlevel 1 (
   echo   [ERROR] %SUB%%FILE%
   set /a NG+=1
