@@ -6,7 +6,7 @@
  * kintone不使用。
  */
 
-import { cdpClick, cdpSelectAll, cdpType, cdpEnableBackgroundMode, cdpScrollChatList, cdpScrollChatListToTop } from '../lib/cdp.js';
+import { cdpClick, cdpSelectAll, cdpType, cdpEnableBackgroundMode, cdpDisableBackgroundMode, cdpScrollChatList, cdpScrollChatListToTop } from '../lib/cdp.js';
 import { sleep, execMain, withTimeout, waitForLineChatReady, ensureWindowVisible, normalizeName, getCurrentMonthTag } from '../lib/utils.js';
 import {
   findYesterdaySection, scanKarisateiTargets,
@@ -102,6 +102,9 @@ export async function runKarisatei(tabId, popupWindowId, logger) {
       await sleep(1000);
     } catch (_) {}
   }
+
+  // 背面モード停止（スクリーンキャスト終了）
+  await cdpDisableBackgroundMode(tabId);
 
   logger.success(`完了: ${summary.sent}送信, ${summary.skipped}スキップ, ${summary.errors}エラー`);
   return { summary };
