@@ -248,9 +248,18 @@ async function processUser(tabId, userName, tagName, sentUsers, logger) {
     return { skipped: true, reason: eligibility?.reason || 'unknown' };
   }
 
-  // Step 4: テンプレートメッセージ送信（DOM click版 - Reactイベント確実発火）
+  // Step 4: テンプレートメッセージ送信（DOM click版 - リトライ付き）
   logger.info(`テンプレート「${TEMPLATE_NAME}」を送信中...`);
-  const sendResult = await execMain(tabId, sendTemplateMessageByDOM, [TEMPLATE_NAME]);
+  let sendResult;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      sendResult = await execMain(tabId, sendTemplateMessageByDOM, [TEMPLATE_NAME], 30000);
+      if (sendResult?.messageSent) break;
+    } catch (e) {
+      logger.info(`送信タイムアウト リトライ ${attempt + 1}/2: ${e.message}`);
+      await sleep(2000);
+    }
+  }
   if (sendResult?.error) return sendResult;
   if (!sendResult?.messageSent) return { error: 'メッセージ送信に失敗しました' };
   logger.info(`メッセージ送信成功${sendResult.verified ? '（確認済み）' : ''}`);
@@ -268,10 +277,16 @@ async function processUser(tabId, userName, tagName, sentUsers, logger) {
 async function applyTag(tabId, tagName, logger) {
   logger.info(`タグ付与: ${tagName}`);
 
-  // タグ編集を開く
-  const openResult = await execMain(tabId, openTagEditor);
+  // タグ編集を開く（リトライ3回）
+  let openResult;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    openResult = await execMain(tabId, openTagEditor);
+    if (openResult?.opened) break;
+    logger.info(`タグ編集を開けません。リトライ ${attempt + 1}/3`);
+    await sleep(2000);
+  }
   if (!openResult?.opened) {
-    logger.error('タグ編集を開けませんでした');
+    logger.error('タグ編集を開けませんでした（3回リトライ失敗）');
     return false;
   }
   await sleep(2000);

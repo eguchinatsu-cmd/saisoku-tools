@@ -170,7 +170,7 @@ async function processTarget(tabId, target, tagName, logger) {
   if (isZeroPrice) {
     // === 0円: 直接テキスト入力（テンプレート不使用） ===
     logger.info('0円 → 専用メッセージ直接入力');
-    const sendResult = await execMain(tabId, sendDirectMessageByDOM, [ZERO_PRICE_MESSAGE]);
+    const sendResult = await execMain(tabId, sendDirectMessageByDOM, [ZERO_PRICE_MESSAGE], 30000);
     if (sendResult?.error) return sendResult;
     if (!sendResult?.messageSent) return { error: 'メッセージ送信に失敗しました' };
     priceInfo = '0円・専用メッセージ';
@@ -178,7 +178,7 @@ async function processTarget(tabId, target, tagName, logger) {
   } else if (isLowPrice) {
     // === 1-999円: テンプレートそのまま ===
     logger.info(`${price}円 → テンプレートそのまま（引き取り文あり）`);
-    const sendResult = await execMain(tabId, sendTemplateMessageByDOM, [TEMPLATE_NAME]);
+    const sendResult = await execMain(tabId, sendTemplateMessageByDOM, [TEMPLATE_NAME], 30000);
     if (sendResult?.error) return sendResult;
     if (!sendResult?.messageSent) return { error: 'メッセージ送信に失敗しました' };
     priceInfo = `${price}円・テンプレートそのまま`;
@@ -188,12 +188,12 @@ async function processTarget(tabId, target, tagName, logger) {
     logger.info(`${price}円 → テンプレート + 引き取り文削除`);
 
     // テンプレート選択（送信前に停止）
-    const selectResult = await execMain(tabId, selectTemplateByDOM, [TEMPLATE_NAME]);
+    const selectResult = await execMain(tabId, selectTemplateByDOM, [TEMPLATE_NAME], 30000);
     if (selectResult?.error) return selectResult;
     if (!selectResult?.selected) return { error: 'テンプレート選択に失敗しました' };
 
     // 引き取り文を削除して送信
-    const sendResult = await execMain(tabId, editAndSendByDOM);
+    const sendResult = await execMain(tabId, editAndSendByDOM, [], 30000);
     if (sendResult?.error) return sendResult;
     if (!sendResult?.messageSent) return { error: 'メッセージ送信に失敗しました' };
     priceInfo = `${price}円・引き取り文削除`;
@@ -207,9 +207,15 @@ async function processTarget(tabId, target, tagName, logger) {
 
 async function applyTag(tabId, tagName, logger) {
   logger.info(`タグ付与: ${tagName}`);
-  const openResult = await execMain(tabId, openTagEditor);
+  let openResult;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    openResult = await execMain(tabId, openTagEditor);
+    if (openResult?.opened) break;
+    logger.info(`タグ編集を開けません。リトライ ${attempt + 1}/3`);
+    await sleep(2000);
+  }
   if (!openResult?.opened) {
-    logger.error('タグ編集を開けませんでした');
+    logger.error('タグ編集を開けませんでした（3回リトライ失敗）');
     return false;
   }
   await sleep(2000);
