@@ -4,7 +4,7 @@
  */
 
 import { attachDebugger, detachDebugger, cdpClick } from './lib/cdp.js';
-import { sleep, execMain, waitForTabLoad, waitForLineChatReady, ensureWindowVisible, cleanupOrphanedPopups, getCurrentMonthTag } from './lib/utils.js';
+import { sleep, execMain, waitForTabLoad, waitForLineChatReady, reEnableBackgroundMode, ensureWindowVisible, cleanupOrphanedPopups, getCurrentMonthTag } from './lib/utils.js';
 import { createLogger, getLogBuffer, clearLogBuffer, restoreLogBuffer } from './lib/logger.js';
 import { getChatClosePosition } from './lib/line-chat.js';
 
@@ -50,7 +50,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === 'runAll') {
     if (isRunning) { sendResponse({ error: '別のタスクが実行中です' }); return; }
-    handleRunAll();
+    handleRunAll(msg.testMode || false);
     sendResponse({ started: true });
   }
   if (msg.type === 'getStatus') {
@@ -125,17 +125,17 @@ function getKintoneConfig(settings) {
 }
 
 // === 単一タスク実行 ===
-async function runTask(taskName, tab, popupWindowId, kintoneConfig) {
+async function runTask(taskName, tab, popupWindowId, kintoneConfig, testOptions = null) {
   const logger = createLogger(taskName);
   switch (taskName) {
     case 'karisatei':
-      return await runKarisatei(tab.id, popupWindowId, logger);
+      return await runKarisatei(tab.id, popupWindowId, logger, testOptions);
     case 'honsatei':
       if (!kintoneConfig.apiToken) throw new Error('kintone APIトークンが設定されていません。⚙設定で入力してください。');
-      return await runHonsatei(tab.id, popupWindowId, logger, kintoneConfig);
+      return await runHonsatei(tab.id, popupWindowId, logger, kintoneConfig, testOptions);
     case 'konpokit':
       if (!kintoneConfig.apiToken) throw new Error('kintone APIトークンが設定されていません。⚙設定で入力してください。');
-      return await runKonpokit(tab.id, popupWindowId, logger, kintoneConfig);
+      return await runKonpokit(tab.id, popupWindowId, logger, kintoneConfig, testOptions);
     default:
       throw new Error(`Unknown task: ${taskName}`);
   }
@@ -196,7 +196,7 @@ async function handleRun(taskName) {
 }
 
 // === 全タスク一括実行（ポップアップ1回だけ） ===
-async function handleRunAll() {
+async function handleRunAll(testMode = false) {
   isRunning = true;
   clearLogBuffer(); // 新しい実行開始時にログをクリア
   const results = {};
@@ -211,8 +211,16 @@ async function handleRunAll() {
     popupWindowId = popup.popupWindowId;
     debuggerAttached = true;
 
-    const settings = await chrome.storage.sync.get(['kintoneApiToken', 'kintoneDomain', 'kintoneAppId']);
+    const settings = await chrome.storage.sync.get(['kintoneApiToken', 'kintoneDomain', 'kintoneAppId', 'testChatId']);
     const kintoneConfig = getKintoneConfig(settings);
+
+    // テストモード設定
+    let testOptions = null;
+    if (testMode) {
+      if (!settings.testChatId) throw new Error('テスト送信先チャットIDが未設定です');
+      testOptions = { testChatId: settings.testChatId, maxTargets: 2 };
+      console.log(`[Saisoku] テストモード: 送信先=${settings.testChatId}, 最大2件`);
+    }
 
     const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 25000);
 
@@ -222,9 +230,35 @@ async function handleRunAll() {
         chrome.runtime.sendMessage({ type: 'taskStart', task: taskName }).catch(() => {});
 
         try {
-          results[taskName] = await runTask(taskName, tab, popupWindowId, kintoneConfig);
+          results[taskName] = await runTask(taskName, tab, popupWindowId, kintoneConfig, testOptions);
         } catch (e) {
           results[taskName] = { error: e.message };
+
+          // タスク間リカバリー: タブやデバッガが壊れたら復旧して次のタスクに進む
+          try {
+            const tabCheck = await chrome.tabs.get(tab.id).catch(() => null);
+            if (!tabCheck) {
+              // タブが消えた → ポップアップウィンドウごと再作成
+              console.log(`[Saisoku] タブ消失 → ポップアップ再作成`);
+              if (popupWindowId) {
+                try { await chrome.windows.remove(popupWindowId); } catch (_) {}
+              }
+              const popup = await initLinePopup();
+              tab = popup.tab;
+              popupWindowId = popup.popupWindowId;
+            } else if (e.message?.includes('Debugger is not attached')) {
+              // デバッガだけ外れた → 再アタッチ
+              console.log(`[Saisoku] デバッガ再接続`);
+              await attachDebugger(tab.id);
+            }
+            // LINE Chatトップに戻す
+            await chrome.tabs.update(tab.id, { url: 'https://chat.line.biz/' });
+            await sleep(2000);
+            await reEnableBackgroundMode(tab.id);
+            await waitForLineChatReady(tab.id, 10000);
+          } catch (recoveryErr) {
+            console.error(`[Saisoku] リカバリー失敗: ${recoveryErr.message}`);
+          }
         }
 
         await saveTaskCompletion(taskName, results[taskName]);
