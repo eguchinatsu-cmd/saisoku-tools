@@ -9,10 +9,11 @@ settingsBtn.addEventListener('click', () => {
 });
 
 // 設定読み込み
-chrome.storage.sync.get(['kintoneApiToken', 'kintoneDomain', 'kintoneAppId'], (s) => {
+chrome.storage.sync.get(['kintoneApiToken', 'kintoneDomain', 'kintoneAppId', 'testChatId'], (s) => {
   if (s.kintoneApiToken) document.getElementById('apiToken').value = s.kintoneApiToken;
   if (s.kintoneDomain) document.getElementById('domain').value = s.kintoneDomain;
   if (s.kintoneAppId) document.getElementById('appId').value = s.kintoneAppId;
+  if (s.testChatId) document.getElementById('testChatId').value = s.testChatId;
 });
 
 saveBtn.addEventListener('click', () => {
@@ -20,6 +21,7 @@ saveBtn.addEventListener('click', () => {
     kintoneApiToken: document.getElementById('apiToken').value,
     kintoneDomain: document.getElementById('domain').value,
     kintoneAppId: document.getElementById('appId').value,
+    testChatId: document.getElementById('testChatId').value,
   }, () => {
     settingsStatus.textContent = '保存しました';
     setTimeout(() => { settingsStatus.textContent = ''; }, 2000);
@@ -34,6 +36,7 @@ const logBox = document.getElementById('logBox');
 function setAllDisabled(disabled) {
   taskBtns.forEach(b => b.disabled = disabled);
   runAllBtn.disabled = disabled;
+  document.getElementById('testRunBtn').disabled = disabled;
 }
 
 function addLog(level, text, overrideTime) {
@@ -74,6 +77,20 @@ runAllBtn.addEventListener('click', () => {
   setAllDisabled(true);
   addLog('info', '=== 全部実行 開始 ===');
   chrome.runtime.sendMessage({ type: 'runAll' });
+});
+
+// ボタンクリック: テスト全実行
+const testRunBtn = document.getElementById('testRunBtn');
+testRunBtn.addEventListener('click', () => {
+  chrome.storage.sync.get(['testChatId'], (s) => {
+    if (!s.testChatId) {
+      addLog('error', 'テスト送信先チャットIDが設定されていません。⚙設定で入力してください。');
+      return;
+    }
+    setAllDisabled(true);
+    addLog('info', '=== テスト全実行 開始（送信先: テストchat） ===');
+    chrome.runtime.sendMessage({ type: 'runAll', testMode: true });
+  });
 });
 
 // === メッセージ受信（background → popup） ===

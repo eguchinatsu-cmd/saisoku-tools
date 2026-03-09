@@ -7,8 +7,8 @@
  * スクロール完全不要。
  */
 
-import { cdpClick, cdpSelectAll, cdpType, cdpEnableBackgroundMode, cdpDisableBackgroundMode } from '../lib/cdp.js';
-import { sleep, execMain, withTimeout, waitForTabLoad, waitForLineChatReady, waitForChatContent, ensureWindowVisible, normalizeName, getCurrentMonthTag, getYesterdayJST } from '../lib/utils.js';
+import { cdpClick, cdpSelectAll, cdpType, cdpEnableBackgroundMode, cdpDisableBackgroundMode, attachDebugger } from '../lib/cdp.js';
+import { sleep, execMain, withTimeout, waitForTabLoad, waitForLineChatReady, waitForChatContent, navigateToLineChat, reEnableBackgroundMode, ensureWindowVisible, normalizeName, getCurrentMonthTag, getYesterdayJST } from '../lib/utils.js';
 import {
   getFilterStatus, getFilterAllOptionPosition,
   clickUserInChatList, clickBestMatchInChatList, checkKarisateiEligibility,
@@ -22,11 +22,13 @@ const TEMPLATE_NAME = '仮査定中の方へ';
 const TAG_PREFIX = '仮査定後催促';
 const USER_TIMEOUT_MS = 60000;
 
-export async function runKarisatei(tabId, popupWindowId, logger) {
+export async function runKarisatei(tabId, popupWindowId, logger, testOptions = null) {
+  const isTest = !!testOptions;
   const summary = { sent: 0, skipped: 0, errors: 0 };
   const sentUsers = new Set();
   const tagName = getCurrentMonthTag(TAG_PREFIX);
 
+  if (isTest) logger.info('=== テストモード ===');
   logger.info(`テンプレート: ${TEMPLATE_NAME}`);
   logger.info(`タグ: ${tagName}`);
 
@@ -63,6 +65,45 @@ export async function runKarisatei(tabId, popupWindowId, logger) {
     await cdpDisableBackgroundMode(tabId);
     return { summary };
   }
+
+  // テストモード: 「テスト用」タグを取得（本番タグの代わりに使用）
+  let testTagId = null;
+  const TEST_TAG_NAME = 'テスト用';
+  if (isTest) {
+    try {
+      testTagId = await execMain(tabId, async function(botId, tName) {
+        var res = await fetch('/api/v1/bots/' + botId + '/tags');
+        var data = await res.json();
+        var tag = data.list.find(function(t) { return t.name === tName; });
+        return tag ? tag.tagId : null;
+      }, [BOT_ID, TEST_TAG_NAME], 15000);
+      logger.info(testTagId ? `テスト用タグID: ${testTagId}` : 'テスト用タグ未検出');
+    } catch (e) {
+      logger.info(`テスト用タグ取得失敗: ${e.message}`);
+    }
+  }
+
+  // ページフレームが壊れていたら復帰（SPAのフレーム破壊対策）
+  // () => true だと空ページでもpassするため、LINE Chat要素を確認
+  try {
+    const pageOk = await execMain(tabId, () => {
+      return !!(document.querySelector('input[type="text"], input[type="search"]') ||
+               document.querySelector('[class*="chatlist"], [class*="ChatList"]'));
+    }, [], 3000);
+    if (!pageOk) throw new Error('LINE Chat elements not found');
+  } catch (_) {
+    logger.info('ページ復帰中...');
+    await chrome.tabs.update(tabId, { url: 'https://chat.line.biz/' });
+    await sleep(2000);
+    await reEnableBackgroundMode(tabId);
+    await waitForLineChatReady(tabId, 10000);
+  }
+
+  // テストモード: 最大件数制限
+  if (isTest && testOptions.maxTargets && named.length > testOptions.maxTargets) {
+    logger.info(`テストモード: ${named.length}人 → ${testOptions.maxTargets}人に制限`);
+    named.splice(testOptions.maxTargets);
+  }
   logger.info(`対象: ${named.length}人 - ${named.map(t => t.name).join(', ')}`);
 
   // Step 2: フィルターを「すべて」に切り替え（検索のため）
@@ -95,8 +136,10 @@ export async function runKarisatei(tabId, popupWindowId, logger) {
     await ensureWindowVisible(popupWindowId);
 
     try {
+      const effectiveTagName = isTest ? TEST_TAG_NAME : tagName;
+      const effectiveTagId = isTest ? testTagId : tagId;
       const result = await withTimeout(
-        () => processUser(tabId, target, tagName, tagId, sentUsers, logger),
+        () => processUser(tabId, target, effectiveTagName, effectiveTagId, sentUsers, logger, testOptions),
         USER_TIMEOUT_MS,
         target.name
       );
@@ -114,9 +157,23 @@ export async function runKarisatei(tabId, popupWindowId, logger) {
     } catch (e) {
       summary.errors++;
       logger.error(`${target.name}: ${e.message}`);
-      if (e.message.includes('TIMEOUT')) {
-        await chrome.tabs.update(tabId, { url: 'https://chat.line.biz/' });
-        await waitForLineChatReady(tabId, 10000);
+      // デバッガ外れ or タイムアウト → 再接続してから続行
+      if (e.message.includes('Debugger is not attached') || e.message.toLowerCase().includes('timeout')) {
+        try {
+          logger.info('デバッガ再接続中...');
+          await attachDebugger(tabId);
+          logger.info('デバッガ再接続完了');
+        } catch (attachErr) {
+          if (!attachErr.message?.toLowerCase().includes('already attached') && !attachErr.message?.includes('Another debugger')) {
+            logger.error(`デバッガ再接続失敗: ${attachErr.message}`);
+          }
+        }
+        if (e.message.toLowerCase().includes('timeout')) {
+          await chrome.tabs.update(tabId, { url: 'https://chat.line.biz/' });
+          await sleep(2000);
+          await reEnableBackgroundMode(tabId);
+          await waitForLineChatReady(tabId, 10000);
+        }
       }
     }
 
@@ -219,7 +276,8 @@ async function fetchTargetsViaAPI(tabId, tagName, logger) {
 /**
  * 個別ユーザー処理: 検索→資格チェック→テンプレート送信→タグ付与
  */
-async function processUser(tabId, target, tagName, tagId, sentUsers, logger) {
+async function processUser(tabId, target, tagName, tagId, sentUsers, logger, testOptions = null) {
+  const isTest = !!testOptions;
   // Step 1: 検索でユーザーを開く
   const searchPos = await execMain(tabId, getSearchBoxPosition);
   if (!searchPos) return { error: '検索ボックスが見つかりません' };
@@ -272,24 +330,29 @@ async function processUser(tabId, target, tagName, tagId, sentUsers, logger) {
       : '検索ヒットなし';
     logger.info(`${target.name}: ${reason} → chatIdで直接遷移`);
     const chatUrl = `https://chat.line.biz/${BOT_ID}/chat/${target.chatId}`;
-    await chrome.tabs.update(tabId, { url: chatUrl });
-    // ページロード完了を待ってからDOM操作（execMain timeoutの原因だった）
-    await waitForTabLoad(tabId, 20000);
-    await waitForLineChatReady(tabId, 15000);
-    await waitForChatContent(tabId, 10000);
+
+    // chrome.tabs.update + コンテンツポーリング（CDP Page.navigateはフレーム破壊するため不使用）
+    await navigateToLineChat(tabId, chatUrl);
 
     // 遷移後に未読チェック
-    const unreadMarker = await execMain(tabId, checkUnreadMarkerInChat);
-    if (unreadMarker?.hasUnread) {
-      return { skipped: true, reason: '未読メッセージあり（既読防止）' };
+    try {
+      const unreadMarker = await execMain(tabId, checkUnreadMarkerInChat, [], 15000);
+      if (unreadMarker?.hasUnread) {
+        return { skipped: true, reason: '未読メッセージあり（既読防止）' };
+      }
+    } catch (e) {
+      logger.info(`未読チェックスキップ: ${e.message}`);
     }
   } else {
     await sleep(2000);
   }
 
   // Step 2: チャットを下までスクロール（最新メッセージを表示）
-  await execMain(tabId, scrollChatToBottom);
-  await sleep(1000);
+  // 同期scrollを複数回実行（バックグラウンドタブのsetIntervalスロットル回避）
+  for (let i = 0; i < 5; i++) {
+    await execMain(tabId, scrollChatToBottom);
+    await sleep(500);
+  }
 
   // Step 3: 資格チェック（安全ネット — APIフィルタ済みだが二重確認）
   let eligibility;
@@ -308,7 +371,14 @@ async function processUser(tabId, target, tagName, tagId, sentUsers, logger) {
     return { skipped: true, reason: eligibility?.reason || 'unknown' };
   }
 
-  // Step 4: テンプレートメッセージ送信
+  // Step 4: テストモード時 → テストchatに切り替えて送信
+  if (isTest) {
+    logger.info(`テストモード: 送信先をテストchatに切替`);
+    const testChatUrl = `https://chat.line.biz/${BOT_ID}/chat/${testOptions.testChatId}`;
+    await navigateToLineChat(tabId, testChatUrl);
+  }
+
+  // テンプレートメッセージ送信
   logger.info(`テンプレート「${TEMPLATE_NAME}」を送信中...`);
   let sendResult;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -327,11 +397,19 @@ async function processUser(tabId, target, tagName, tagId, sentUsers, logger) {
   sentUsers.add(normalizeName(target.name));
 
   // Step 5: タグ付与（API方式 — UI操作不要）
+  const tagChatId = isTest ? testOptions.testChatId : target.chatId;
   let tagged = false;
   try {
-    tagged = await applyTagViaAPI(tabId, target.chatId, tagId, tagName, logger);
+    tagged = await applyTagViaAPI(tabId, tagChatId, tagId, tagName, logger);
   } catch (e) {
     logger.info(`タグ付与スキップ: ${e.message}`);
+  }
+
+  // テストモード: タグを即削除（クリーンアップ）
+  if (isTest && tagged) {
+    try {
+      await removeTagViaAPI(tabId, tagChatId, tagId, logger);
+    } catch (_) {}
   }
 
   return { success: true, tagged };
@@ -373,4 +451,32 @@ async function applyTagViaAPI(tabId, chatId, tagId, tagName, logger) {
     return true;
   }
   return false;
+}
+
+/** テストモード用: タグ削除（クリーンアップ） */
+async function removeTagViaAPI(tabId, chatId, tagId, logger) {
+  // タグを外す = 現在のタグ一覧から対象tagIdを除いてPUT
+  const result = await execMain(tabId, async function(botId, cId, tId) {
+    try {
+      // 現在のタグ一覧を取得
+      var chatRes = await fetch('/api/v1/bots/' + botId + '/chats/' + cId);
+      var chatData = await chatRes.json();
+      var currentTags = (chatData.tagIds || []).filter(function(id) { return id !== tId; });
+      // タグ一覧を更新（対象を除外）
+      var res = await fetch('/api/v1/bots/' + botId + '/chats/' + cId + '/tags', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        body: JSON.stringify({ tagIds: currentTags }),
+      });
+      return res.ok ? { success: true } : { error: res.status };
+    } catch (e) {
+      return { error: e.message };
+    }
+  }, [BOT_ID, chatId, tagId], 15000);
+
+  if (result?.success) {
+    logger.info('テストタグ削除完了（クリーンアップ）');
+  } else {
+    logger.info(`テストタグ削除失敗: ${result?.error}`);
+  }
 }

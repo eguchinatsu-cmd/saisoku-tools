@@ -20,6 +20,11 @@
     <label>kintoneアプリID
       <input type="text" id="appId" value="11">
     </label>
+    <hr style="margin: 8px 0; border: none; border-top: 1px solid #ccc;">
+    <label style="font-weight: 600; color: #e67e22;">テストモード設定</label>
+    <label>テスト送信先チャットID
+      <input type="text" id="testChatId" placeholder="U... or C...（自分のchatID）">
+    </label>
     <button id="saveSettings" class="btn btn-sm">保存</button>
     <span id="settingsStatus"></span>
   </div>
@@ -38,6 +43,7 @@
       <span class="status" id="status-konpokit">--</span>
     </div>
     <button class="btn btn-all" id="runAllBtn">全部実行</button>
+    <button class="btn btn-test" id="testRunBtn">テスト全実行</button>
   </div>
 
   <div class="log-area">

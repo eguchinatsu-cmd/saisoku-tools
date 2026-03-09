@@ -10,8 +10,8 @@
  *   1000円以上: テンプレートから「引き取り」文を削除して送信
  */
 
-import { cdpClick, cdpSelectAll, cdpType, attachDebugger } from '../lib/cdp.js';
-import { sleep, execMain, withTimeout, waitForLineChatReady, waitForChatContent, ensureWindowVisible, getYesterdayJST, getCurrentMonthTag } from '../lib/utils.js';
+import { cdpClick, cdpSelectAll, cdpType, attachDebugger, cdpEnableBackgroundMode, cdpDisableBackgroundMode } from '../lib/cdp.js';
+import { sleep, execMain, withTimeout, waitForTabLoad, waitForLineChatReady, waitForChatContent, navigateToLineChat, reEnableBackgroundMode, ensureWindowVisible, getYesterdayJST, getCurrentMonthTag } from '../lib/utils.js';
 import { getKintoneRecords } from '../lib/kintone-api.js';
 import {
   getFilterStatus, getFilterAllOptionPosition,
@@ -38,13 +38,17 @@ const ZERO_PRICE_MESSAGE = [
   'ご確認のほどよろしくお願いいたします。',
 ].join('\n');
 
-export async function runHonsatei(tabId, popupWindowId, logger, kintoneConfig) {
+export async function runHonsatei(tabId, popupWindowId, logger, kintoneConfig, testOptions = null) {
+  const isTest = !!testOptions;
   const summary = { sent: 0, skipped: 0, errors: 0 };
   const tagName = getCurrentMonthTag(TAG_PREFIX);
   const yesterday = getYesterdayJST();
 
+  if (isTest) logger.info('=== テストモード ===');
   logger.info(`対象日: ${yesterday.formatted}（昨日）`);
   logger.info(`タグ: ${tagName}`);
+
+  await cdpEnableBackgroundMode(tabId);
 
   // タグIDを取得（API方式タグ付与用）
   let tagId = null;
@@ -67,12 +71,37 @@ export async function runHonsatei(tabId, popupWindowId, logger, kintoneConfig) {
     targets = await getKintoneRecords(kintoneConfig, 'honsatei', yesterday.formatted);
   } catch (e) {
     logger.error(`kintone APIエラー: ${e.message}`);
+    await cdpDisableBackgroundMode(tabId);
     return { error: e.message, summary };
   }
 
   if (targets.length === 0) {
     logger.info('対象レコードなし');
+    await cdpDisableBackgroundMode(tabId);
     return { summary };
+  }
+
+  // テストモード: 「テスト用」タグを取得（本番タグの代わりに使用）
+  let testTagId = null;
+  const TEST_TAG_NAME = 'テスト用';
+  if (isTest) {
+    try {
+      testTagId = await execMain(tabId, async function(botId, tName) {
+        var res = await fetch('/api/v1/bots/' + botId + '/tags');
+        var data = await res.json();
+        var tag = data.list.find(function(t) { return t.name === tName; });
+        return tag ? tag.tagId : null;
+      }, [BOT_ID, TEST_TAG_NAME], 15000);
+      logger.info(testTagId ? `テスト用タグID: ${testTagId}` : 'テスト用タグ未検出');
+    } catch (e) {
+      logger.info(`テスト用タグ取得失敗: ${e.message}`);
+    }
+  }
+
+  // テストモード: 最大件数制限
+  if (isTest && testOptions.maxTargets && targets.length > testOptions.maxTargets) {
+    logger.info(`テストモード: ${targets.length}件 → ${testOptions.maxTargets}件に制限`);
+    targets = targets.slice(0, testOptions.maxTargets);
   }
   logger.info(`対象: ${targets.length}件 - ${targets.map(t => `${t.recordNumber}(${t.price}円)`).join(', ')}`);
 
@@ -105,8 +134,10 @@ export async function runHonsatei(tabId, popupWindowId, logger, kintoneConfig) {
     await ensureWindowVisible(popupWindowId);
 
     try {
+      const effectiveTagName = isTest ? TEST_TAG_NAME : tagName;
+      const effectiveTagId = isTest ? testTagId : tagId;
       const result = await withTimeout(
-        () => processTarget(tabId, target, tagName, tagId, logger),
+        () => processTarget(tabId, target, effectiveTagName, effectiveTagId, logger, testOptions),
         USER_TIMEOUT_MS,
         target.recordNumber
       );
@@ -125,19 +156,21 @@ export async function runHonsatei(tabId, popupWindowId, logger, kintoneConfig) {
       summary.errors++;
       logger.error(`${target.recordNumber}: ${e.message}`);
       // デバッガ外れ or タイムアウト → 再接続してから続行
-      if (e.message.includes('Debugger is not attached') || e.message.includes('TIMEOUT')) {
+      if (e.message.includes('Debugger is not attached') || e.message.toLowerCase().includes('timeout')) {
         try {
           logger.info('デバッガ再接続中...');
           await attachDebugger(tabId);
           logger.info('デバッガ再接続完了');
         } catch (attachErr) {
           // 既にアタッチ済みの場合もある
-          if (!attachErr.message?.includes('Already attached')) {
+          if (!attachErr.message?.toLowerCase().includes('already attached') && !attachErr.message?.includes('Another debugger')) {
             logger.error(`デバッガ再接続失敗: ${attachErr.message}`);
           }
         }
-        if (e.message.includes('TIMEOUT')) {
+        if (e.message.toLowerCase().includes('timeout')) {
           await chrome.tabs.update(tabId, { url: 'https://chat.line.biz/' });
+          await sleep(2000);
+          await reEnableBackgroundMode(tabId);
           await waitForLineChatReady(tabId, 10000);
         }
       }
@@ -151,11 +184,14 @@ export async function runHonsatei(tabId, popupWindowId, logger, kintoneConfig) {
     } catch (_) {}
   }
 
+  await cdpDisableBackgroundMode(tabId);
+
   logger.success(`完了: ${summary.sent}送信, ${summary.skipped}スキップ, ${summary.errors}エラー`);
   return { summary };
 }
 
-async function processTarget(tabId, target, tagName, tagId, logger) {
+async function processTarget(tabId, target, tagName, tagId, logger, testOptions = null) {
+  const isTest = !!testOptions;
   // 1. レコード番号で検索
   logger.info(`${target.recordNumber} で検索中...`);
   const searchPos = await execMain(tabId, getSearchBoxPosition);
@@ -177,32 +213,18 @@ async function processTarget(tabId, target, tagName, tagId, logger) {
   });
   await sleep(2000);
 
-  // 2. 未読チェック
-  const unreadCheck1 = await execMain(tabId, checkUnreadInSearchResult);
-  logger.info(`[未読チェック1] hasUnread=${unreadCheck1?.hasUnread}, debug=${unreadCheck1?.debug}`);
-  if (unreadCheck1?.hasUnread) {
-    await execMain(tabId, clearSearchBox);
-    return { skipped: true, reason: '未読メッセージあり（既読防止）' };
-  }
-
-  // 2.5. タイムスタンプチェック（昨日でなければスキップ）
-  const tsCheck = await execMain(tabId, checkSearchResultTimestamp);
-  logger.info(`[タイムスタンプ] isYesterday=${tsCheck?.isYesterday}, timestamp=${tsCheck?.timestamp}, reason=${tsCheck?.reason || tsCheck?.debug}`);
-  if (tsCheck && !tsCheck.isYesterday && tsCheck.timestamp) {
-    await execMain(tabId, clearSearchBox);
-    return { skipped: true, reason: `最終チャットが昨日ではない（${tsCheck.timestamp}: ${tsCheck.reason}）` };
-  }
-
-  // 3. 「メッセージを検索」→ 結果をクリック
+  // 2. 「メッセージを検索」→ 結果表示後に未読チェック
+  // NOTE: Enter直後のパネルはチャットリスト（検索結果ではない）ので
+  //       先に「メッセージを検索」をクリックしてから未読チェックする
   const msgSearchPos = await execMain(tabId, getMessageSearchLinkPosition);
   if (msgSearchPos) {
     await cdpClick(tabId, msgSearchPos.x, msgSearchPos.y);
     await sleep(5000); // メッセージ検索結果の読み込みに5秒必要
 
-    // メッセージ検索結果でも未読チェック
-    const unreadCheck2 = await execMain(tabId, checkUnreadInSearchResult);
-    logger.info(`[未読チェック2] hasUnread=${unreadCheck2?.hasUnread}, debug=${unreadCheck2?.debug}`);
-    if (unreadCheck2?.hasUnread) {
+    // メッセージ検索結果で未読チェック
+    const unreadCheck = await execMain(tabId, checkUnreadInSearchResult);
+    logger.info(`[未読チェック] hasUnread=${unreadCheck?.hasUnread}, debug=${unreadCheck?.debug}`);
+    if (unreadCheck?.hasUnread) {
       await execMain(tabId, clearSearchBox);
       return { skipped: true, reason: '未読メッセージあり（既読防止）' };
     }
@@ -224,8 +246,11 @@ async function processTarget(tabId, target, tagName, tagId, logger) {
     return { skipped: true, reason: '未読メッセージあり（ここから未読メッセージ検出）' };
   }
 
-  await execMain(tabId, scrollChatToBottom);
-  await sleep(1500);
+  // 同期scrollを複数回実行（バックグラウンドタブのsetIntervalスロットル回避）
+  for (let i = 0; i < 5; i++) {
+    await execMain(tabId, scrollChatToBottom);
+    await sleep(500);
+  }
 
   // 5. 資格チェック（タグ・本査定結果・顧客返信・価格抽出）
   const eligibility = await execMain(tabId, checkHonsateiEligibility, [{ skipTagCheck: false }]);
@@ -242,7 +267,14 @@ async function processTarget(tabId, target, tagName, tagId, logger) {
   const isZeroPrice = price === 0;
   const isLowPrice = price > 0 && price <= LOW_PRICE_THRESHOLD;
 
-  // 7. メッセージ送信（3パターン）（DOM click版 - Reactイベント確実発火）
+  // 7. テストモード時 → テストchatに切り替えて送信
+  if (isTest) {
+    logger.info(`テストモード: 送信先をテストchatに切替`);
+    const testChatUrl = `https://chat.line.biz/${BOT_ID}/chat/${testOptions.testChatId}`;
+    await navigateToLineChat(tabId, testChatUrl);
+  }
+
+  // メッセージ送信（3パターン）（DOM click版 - Reactイベント確実発火）
   let priceInfo;
   if (isZeroPrice) {
     // === 0円: 直接テキスト入力（テンプレート不使用） ===
@@ -279,16 +311,23 @@ async function processTarget(tabId, target, tagName, tagId, logger) {
   // 8. タグ付与（API方式）
   let tagged = false;
   try {
-    tagged = await applyTagViaAPI(tabId, tagId, tagName, logger);
+    tagged = await applyTagViaAPI(tabId, tagId, tagName, logger, isTest ? testOptions.testChatId : null);
   } catch (e) {
     logger.info(`タグ付与スキップ: ${e.message}`);
+  }
+
+  // テストモード: タグを即削除（クリーンアップ）
+  if (isTest && tagged) {
+    try {
+      await removeTagViaAPI(tabId, tagId, logger, testOptions.testChatId);
+    } catch (_) {}
   }
 
   return { success: true, tagged, priceInfo };
 }
 
 /** タグ付与（API方式 — UI操作不要） */
-async function applyTagViaAPI(tabId, tagId, tagName, logger) {
+async function applyTagViaAPI(tabId, tagId, tagName, logger, overrideChatId = null) {
   logger.info(`タグ付与(API): ${tagName}`);
 
   if (!tagId) {
@@ -296,8 +335,8 @@ async function applyTagViaAPI(tabId, tagId, tagName, logger) {
     return false;
   }
 
-  // 現在開いているチャットのchatIdを取得（URLから）
-  const chatId = await execMain(tabId, function() {
+  // chatIdを取得（override or URLから）
+  const chatId = overrideChatId || await execMain(tabId, function() {
     var match = location.pathname.match(/\/chat\/([^/]+)/);
     return match ? match[1] : null;
   }, [], 5000);
@@ -333,4 +372,29 @@ async function applyTagViaAPI(tabId, tagId, tagName, logger) {
     return true;
   }
   return false;
+}
+
+/** テストモード用: タグ削除（クリーンアップ） */
+async function removeTagViaAPI(tabId, tagId, logger, chatId) {
+  const result = await execMain(tabId, async function(botId, cId, tId) {
+    try {
+      var chatRes = await fetch('/api/v1/bots/' + botId + '/chats/' + cId);
+      var chatData = await chatRes.json();
+      var currentTags = (chatData.tagIds || []).filter(function(id) { return id !== tId; });
+      var res = await fetch('/api/v1/bots/' + botId + '/chats/' + cId + '/tags', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        body: JSON.stringify({ tagIds: currentTags }),
+      });
+      return res.ok ? { success: true } : { error: res.status };
+    } catch (e) {
+      return { error: e.message };
+    }
+  }, [BOT_ID, chatId, tagId], 15000);
+
+  if (result?.success) {
+    logger.info('テストタグ削除完了（クリーンアップ）');
+  } else {
+    logger.info(`テストタグ削除失敗: ${result?.error}`);
+  }
 }
