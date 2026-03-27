@@ -4,10 +4,12 @@
  * kintone APIで昨日「本査定完了」になったレコードを取得し、
  * LINE Chatでレコード番号検索 → 価格に応じた3パターンのメッセージ送信 → タグ付与。
  *
- * 価格パターン:
- *   0円: テンプレート不使用、直接テキスト入力
- *   1-999円: テンプレート「本査定後の催促」そのまま
- *   1000円以上: テンプレートから「引き取り」文を削除して送信
+ * 価格パターン（2パターン）:
+ *   0円: 専用メッセージ（返送・引き取り案内付き）
+ *   1円以上: テンプレートテキスト直接入力
+ *
+ * NOTE: テンプレートアイコン(la-chat-plus)のDOM検索が背景モードで失敗するため、
+ *       全パターンsendDirectMessageByDOM（テキスト直接入力）方式に統一。(2026-03-27)
  */
 
 import { cdpClick, cdpSelectAll, cdpType, attachDebugger, cdpEnableBackgroundMode, cdpDisableBackgroundMode } from '../lib/cdp.js';
@@ -19,14 +21,12 @@ import {
   getFirstSearchResultPosition, checkUnreadInSearchResult, checkSearchResultTimestamp,
   checkUnreadMarkerInChat,
   scrollChatToBottom, checkHonsateiEligibility,
-  sendTemplateMessageByDOM, selectTemplateByDOM, sendDirectMessageByDOM, editAndSendByDOM,
+  sendDirectMessageByDOM,
   getChatClosePosition,
 } from '../lib/line-chat.js';
 
 const BOT_ID = 'U6d15f79f9d4634a23b9a085612b087b5';
-const TEMPLATE_NAME = '本査定後の催促';
 const TAG_PREFIX = '本査定後催促済';
-const LOW_PRICE_THRESHOLD = 999;
 const USER_TIMEOUT_MS = 60000;
 
 const ZERO_PRICE_MESSAGE = [
@@ -37,6 +37,35 @@ const ZERO_PRICE_MESSAGE = [
   '',
   'ご確認のほどよろしくお願いいたします。',
 ].join('\n');
+
+// テンプレート「本査定後の催促」のテキスト（{name}を顧客名で置換して使用）
+const TEMPLATE_MESSAGE = [
+  '{name}様',
+  '',
+  'お世話になっております。',
+  '',
+  '本査定結果についてご検討いただけましたでしょうか。',
+  '',
+  '買取をご希望の場合は、以下のテンプレートをコピー、情報をご記入いただきペーストして送信をお願いします。',
+  '',
+  '銀行名：',
+  '金融機関コード：',
+  '支店名：',
+  '支店コード：',
+  '口座種別：',
+  '口座番号：',
+  'ご名義（カナ）：',
+  '買取方法：特急買取/高額買取（お選びください）',
+  '',
+  '※別途、本人確認書類のお写真の送信をお願いします。',
+  '',
+  '※市場価格の変動により買取価格が低下してしまう場合もございますため、',
+  '　お早めにご確認いただきますようお願い申し上げます。',
+].join('\n');
+
+function buildMessage(name) {
+  return TEMPLATE_MESSAGE.replace('{name}', name);
+}
 
 export async function runHonsatei(tabId, popupWindowId, logger, kintoneConfig, testOptions = null) {
   const isTest = !!testOptions;
@@ -230,6 +259,14 @@ async function processTarget(tabId, target, tagName, tagId, logger, testOptions 
     }
   }
 
+  // 3. タイムスタンプチェック（「昨日」以外ならスキップ）
+  const tsCheck = await execMain(tabId, checkSearchResultTimestamp);
+  if (tsCheck && !tsCheck.isYesterday) {
+    logger.info(`タイムスタンプ不一致: ${tsCheck.timestamp} (${tsCheck.reason}) → スキップ`);
+    await execMain(tabId, clearSearchBox);
+    return { skipped: true, reason: `タイムスタンプ不一致: ${tsCheck.timestamp}` };
+  }
+
   const firstPos = await execMain(tabId, getFirstSearchResultPosition);
   if (!firstPos) return { error: 'ユーザーが見つかりません' };
   await cdpClick(tabId, firstPos.x, firstPos.y);
@@ -265,7 +302,6 @@ async function processTarget(tabId, target, tagName, tagId, logger, testOptions 
   logger.info(`価格: ${price}円 (${priceSource}), LINE抽出: ${JSON.stringify(eligibility.allPrices)}`);
 
   const isZeroPrice = price === 0;
-  const isLowPrice = price > 0 && price <= LOW_PRICE_THRESHOLD;
 
   // 7. テストモード時 → テストchatに切り替えて送信
   if (isTest) {
@@ -274,39 +310,22 @@ async function processTarget(tabId, target, tagName, tagId, logger, testOptions 
     await navigateToLineChat(tabId, testChatUrl);
   }
 
-  // メッセージ送信（3パターン）（DOM click版 - Reactイベント確実発火）
+  // メッセージ送信（2パターン）— テキスト直接入力方式
   let priceInfo;
+  let message;
   if (isZeroPrice) {
-    // === 0円: 直接テキスト入力（テンプレート不使用） ===
     logger.info('0円 → 専用メッセージ直接入力');
-    const sendResult = await execMain(tabId, sendDirectMessageByDOM, [ZERO_PRICE_MESSAGE], 30000);
-    if (sendResult?.error) return sendResult;
-    if (!sendResult?.messageSent) return { error: 'メッセージ送信に失敗しました' };
+    message = ZERO_PRICE_MESSAGE;
     priceInfo = '0円・専用メッセージ';
-
-  } else if (isLowPrice) {
-    // === 1-999円: テンプレートそのまま ===
-    logger.info(`${price}円 → テンプレートそのまま（引き取り文あり）`);
-    const sendResult = await execMain(tabId, sendTemplateMessageByDOM, [TEMPLATE_NAME], 30000);
-    if (sendResult?.error) return sendResult;
-    if (!sendResult?.messageSent) return { error: 'メッセージ送信に失敗しました' };
-    priceInfo = `${price}円・テンプレートそのまま`;
-
   } else {
-    // === 1000円以上: テンプレートから引き取り文削除 ===
-    logger.info(`${price}円 → テンプレート + 引き取り文削除`);
-
-    // テンプレート選択（送信前に停止）
-    const selectResult = await execMain(tabId, selectTemplateByDOM, [TEMPLATE_NAME], 30000);
-    if (selectResult?.error) return selectResult;
-    if (!selectResult?.selected) return { error: 'テンプレート選択に失敗しました' };
-
-    // 引き取り文を削除して送信
-    const sendResult = await execMain(tabId, editAndSendByDOM, [], 30000);
-    if (sendResult?.error) return sendResult;
-    if (!sendResult?.messageSent) return { error: 'メッセージ送信に失敗しました' };
-    priceInfo = `${price}円・引き取り文削除`;
+    logger.info(`${price}円 → テンプレートテキスト直接入力`);
+    message = buildMessage(target.name);
+    priceInfo = `${price}円・テンプレートテキスト`;
   }
+
+  const sendResult = await execMain(tabId, sendDirectMessageByDOM, [message], 30000);
+  if (sendResult?.error) return sendResult;
+  if (!sendResult?.messageSent) return { error: 'メッセージ送信に失敗しました' };
 
   // 8. タグ付与（API方式）
   let tagged = false;
